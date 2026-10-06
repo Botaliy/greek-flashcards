@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1d4ed8">
+  <title>Ελληνικά — карточки</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🇬🇷</text></svg>">
+  <link rel="stylesheet" href="static/style.css?v=1">
+</head>
+<body>
+  <div id="login" class="screen hidden">
+    <form id="login-form" class="login-card">
+      <div class="logo">Ελληνικά</div>
+      <p class="muted">Карточки для греческого A2</p>
+      <input name="username" placeholder="Логин" autocomplete="username" autocapitalize="none" required>
+      <input name="password" type="password" placeholder="Пароль" autocomplete="current-password" required>
+      <button class="btn primary" type="submit">Войти</button>
+      <p class="error" id="login-error"></p>
+    </form>
+  </div>
+
+  <div id="app" class="hidden">
+    <header class="topbar">
+      <div class="brand">Ελληνικά</div>
+      <nav>
+        <a href="#study" data-tab="study">Учить</a>
+        <a href="#words" data-tab="words">Слова</a>
+        <a href="#progress" data-tab="progress">Прогресс</a>
+        <a href="#settings" data-tab="settings" id="nav-user">⚙</a>
+      </nav>
+    </header>
+
+    <main>
+      <!-- STUDY: setup -->
+      <section id="view-study" class="view">
+        <div id="study-setup">
+          <h2>Тренировка</h2>
+          <div class="field">
+            <div class="label-row"><label>Группы</label><button class="link" id="toggle-all-groups">выбрать все</button></div>
+            <div id="group-chips" class="chips"></div>
+          </div>
+          <div class="field">
+            <label>Направление</label>
+            <div class="seg" data-name="direction">
+              <button data-value="gr-ru">Греческий → русский</button>
+              <button data-value="ru-gr">Русский → греческий</button>
+              <button data-value="mixed">Вперемешку</button>
+            </div>
+          </div>
+          <div class="field">
+            <label>Как отвечать</label>
+            <div class="seg" data-name="answer">
+              <button data-value="flip">Переворачивать карточку</button>
+              <button data-value="type">Вводить ответ</button>
+            </div>
+          </div>
+          <div class="field">
+            <label>Какие слова</label>
+            <div class="seg" data-name="mode">
+              <button data-value="unlearned">Невыученные</button>
+              <button data-value="learned">Повторить выученные</button>
+              <button data-value="all">Все</button>
+            </div>
+          </div>
+          <div class="field">
+            <label>Карточек за раз</label>
+            <div class="seg" data-name="limit">
+              <button data-value="10">10</button>
+              <button data-value="20">20</button>
+              <button data-value="40">40</button>
+              <button data-value="100">100</button>
+            </div>
+          </div>
+          <button class="btn primary big" id="start-btn">Начать</button>
+          <p class="error" id="study-error"></p>
+        </div>
+
+        <!-- STUDY: card -->
+        <div id="study-card" class="hidden">
+          <div class="session-bar">
+            <button class="link" id="stop-btn">✕ Закончить</button>
+            <span id="session-count" class="muted"></span>
+          </div>
+          <div class="progress-line"><div id="session-progress"></div></div>
+
+          <div class="card" id="card">
+            <div class="card-meta"><span id="card-group"></span><span id="card-box"></span></div>
+            <div class="card-prompt" id="card-prompt"></div>
+            <button class="speak hidden" id="speak-prompt" title="Произнести">🔊</button>
+            <div class="card-answer hidden" id="card-answer">
+              <div class="answer-text" id="answer-text"></div>
+              <button class="speak hidden" id="speak-answer" title="Произнести">🔊</button>
+              <div class="note" id="card-note"></div>
+            </div>
+            <div class="type-area hidden" id="type-area">
+              <input id="type-input" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Твой ответ">
+              <div id="type-result"></div>
+            </div>
+          </div>
+
+          <div class="actions" id="actions-reveal">
+            <button class="btn primary big" id="reveal-btn">Показать ответ</button>
+          </div>
+          <div class="actions hidden" id="actions-check">
+            <button class="btn primary big" id="check-btn">Проверить</button>
+            <button class="btn ghost" id="dontknow-btn">Не знаю</button>
+          </div>
+          <div class="actions two hidden" id="actions-grade">
+            <button class="btn bad big" id="wrong-btn">Не помню</button>
+            <button class="btn good big" id="right-btn">Помню</button>
+          </div>
+          <div class="actions two hidden" id="actions-typed">
+            <button class="btn ghost" id="override-btn">Я ответил верно</button>
+            <button class="btn primary big" id="next-btn">Дальше</button>
+          </div>
+          <button class="btn learned-toggle" id="learned-btn">☆ Отметить выученным</button>
+          <p class="hint muted" id="kbd-hint">Пробел — показать, ← не помню, → помню, L — выучено</p>
+        </div>
+
+        <!-- STUDY: summary -->
+        <div id="study-summary" class="hidden">
+          <h2>Готово! 🎉</h2>
+          <div class="summary-stats" id="summary-stats"></div>
+          <div id="summary-wrong"></div>
+          <div class="actions two">
+            <button class="btn ghost" id="summary-setup-btn">Настройки</button>
+            <button class="btn primary" id="summary-again-btn">Ещё раз</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- WORDS -->
+      <section id="view-words" class="view hidden">
+        <div class="words-head">
+          <h2>Словарь</h2>
+          <div class="row">
+            <button class="btn small" id="add-word-btn">+ Слово</button>
+            <button class="btn small ghost" id="bulk-btn">Импорт списком</button>
+            <button class="btn small ghost" id="add-group-btn">+ Группа</button>
+          </div>
+        </div>
+        <div class="filters">
+          <select id="words-group"></select>
+          <select id="words-status">
+            <option value="all">Все</option>
+            <option value="unlearned">Невыученные</option>
+            <option value="learned">Выученные</option>
+          </select>
+          <input id="words-search" type="search" placeholder="Поиск…">
+        </div>
+        <div class="group-tools hidden" id="group-tools">
+          <button class="link" id="rename-group-btn">переименовать группу</button>
+          <button class="link danger" id="delete-group-btn">удалить группу</button>
+        </div>
+        <div id="words-count" class="muted"></div>
+        <ul id="words-list" class="words-list"></ul>
+      </section>
+
+      <!-- PROGRESS -->
+      <section id="view-progress" class="view hidden">
+        <h2>Прогресс</h2>
+        <div id="progress-content"></div>
+      </section>
+
+      <!-- SETTINGS -->
+      <section id="view-settings" class="view hidden">
+        <h2>Аккаунт</h2>
+        <p>Ты вошёл как <b id="me-name"></b></p>
+        <form id="password-form" class="stack">
+          <h3>Сменить пароль</h3>
+          <input name="old" type="password" placeholder="Текущий пароль" autocomplete="current-password" required>
+          <input name="new" type="password" placeholder="Новый пароль (от 6 символов)" autocomplete="new-password" minlength="6" required>
+          <button class="btn primary" type="submit">Сохранить</button>
+          <p class="muted" id="password-msg"></p>
+        </form>
+        <div class="stack">
+          <h3>Озвучка</h3>
+          <p class="muted" id="voice-info"></p>
+        </div>
+        <div class="stack">
+          <button class="btn ghost" id="logout-btn">Выйти</button>
+          <button class="link danger" id="reset-btn">Сбросить мой прогресс</button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="modal">
+    <form method="dialog" id="modal-form" class="stack">
+      <h3 id="modal-title"></h3>
+      <div id="modal-body" class="stack"></div>
+      <p class="error" id="modal-error"></p>
+      <div class="row end">
+        <button class="btn ghost" value="cancel" formnovalidate>Отмена</button>
+        <button class="btn primary" value="ok" id="modal-ok">Сохранить</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="static/app.js?v=1"></script>
+</body>
+</html>

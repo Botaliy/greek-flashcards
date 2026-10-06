@@ -1,0 +1,23 @@
+# Served at https://expense-tracker.site/greek/ by the expense-tracker nginx,
+# which reaches this container by name over the shared docker network.
+# The service must NOT be called "app": expense-tracker's app has that name on
+# the same network, and docker DNS would round-robin between the two.
+services:
+  greek-cards:
+    build: .
+    container_name: greek-cards
+    restart: unless-stopped
+    environment:
+      - DB_PATH=/app/data/greek.db
+      - TZ_NAME=Europe/Athens
+      - COOKIE_PATH=/greek
+    volumes:
+      - ./data:/app/data
+    mem_limit: 150m
+    networks:
+      - web
+
+networks:
+  web:
+    external: true
+    name: expense-tracker_default
