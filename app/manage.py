@@ -9,7 +9,7 @@ import secrets
 import sys
 import time
 
-from .db import connect, init_db
+from .db import aorist_from_note, connect, init_db
 from .security import hash_password
 
 
@@ -55,8 +55,8 @@ def import_tsv(path: str) -> None:
                 continue
             existing.add((gid, greek.lower()))
             conn.execute(
-                "INSERT INTO words (group_id, greek, russian, note, created_at) VALUES (?, ?, ?, ?, ?)",
-                (gid, greek, russian, note, now),
+                "INSERT INTO words (group_id, greek, russian, note, aorist, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (gid, greek, russian, note, aorist_from_note(note), now),
             )
             added += 1
     conn.commit()

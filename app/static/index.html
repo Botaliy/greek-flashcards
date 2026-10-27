@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#1d4ed8">
   <title>Ελληνικά — карточки</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🇬🇷</text></svg>">
-  <link rel="stylesheet" href="static/style.css?v=1">
+  <link rel="stylesheet" href="static/style.css?v=3">
 </head>
 <body>
   <div id="login" class="screen hidden">
@@ -37,10 +37,18 @@
         <div id="study-setup">
           <h2>Тренировка</h2>
           <div class="field">
+            <label>Что тренируем</label>
+            <div class="seg" data-name="skill">
+              <button data-value="translate">Перевод</button>
+              <button data-value="aorist">Аорист</button>
+              <button data-value="aorist_conj">Аорист по лицам</button>
+            </div>
+          </div>
+          <div class="field">
             <div class="label-row"><label>Группы</label><button class="link" id="toggle-all-groups">выбрать все</button></div>
             <div id="group-chips" class="chips"></div>
           </div>
-          <div class="field">
+          <div class="field" id="field-direction">
             <label>Направление</label>
             <div class="seg" data-name="direction">
               <button data-value="gr-ru">Греческий → русский</button>
@@ -87,6 +95,7 @@
           <div class="card" id="card">
             <div class="card-meta"><span id="card-group"></span><span id="card-box"></span></div>
             <div class="card-prompt" id="card-prompt"></div>
+            <div class="card-sub muted hidden" id="card-sub"></div>
             <button class="speak hidden" id="speak-prompt" title="Произнести">🔊</button>
             <div class="card-answer hidden" id="card-answer">
               <div class="answer-text" id="answer-text"></div>
@@ -199,6 +208,6 @@
   </dialog>
 
   <div id="toast" class="toast hidden"></div>
-  <script src="static/app.js?v=1"></script>
+  <script src="static/app.js?v=3"></script>
 </body>
 </html>

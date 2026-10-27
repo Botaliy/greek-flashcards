@@ -13,8 +13,9 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .db import connect, init_db
+from .db import aorist_from_note, connect, init_db
 from .security import hash_password, hash_token, new_token, verify_password
+from .verbs import conjugate, hint
 
 STATIC = Path(__file__).parent / "static"
 TZ = ZoneInfo(os.environ.get("TZ_NAME", "Europe/Athens"))
@@ -24,6 +25,9 @@ COOKIE_PATH = os.environ.get("COOKIE_PATH", "/")
 SESSION_TTL = 60 * 60 * 24 * 180
 # Days until the next showing, indexed by Leitner box.
 BOX_INTERVAL_DAYS = [0, 1, 3, 7, 14, 30]
+# What is trained: the translation of a word, the aorist of a verb, or the aorist in all persons.
+Skill = Literal["translate", "aorist", "aorist_conj"]
+VERB_SKILLS = ("aorist", "aorist_conj")
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
@@ -147,13 +151,18 @@ def list_groups(user=Depends(current_user), db=Depends(get_db)):
         """
         SELECT g.id, g.name,
                COUNT(w.id) AS total,
-               COALESCE(SUM(p.learned), 0) AS learned
+               COALESCE(SUM(p.learned), 0) AS learned,
+               COUNT(NULLIF(w.aorist, '')) AS verbs,
+               COALESCE(SUM(pa.learned), 0) AS aorist_learned,
+               COALESCE(SUM(pc.learned), 0) AS conj_learned
         FROM groups g
         LEFT JOIN words w ON w.group_id = g.id
-        LEFT JOIN progress p ON p.word_id = w.id AND p.user_id = ?
+        LEFT JOIN progress p ON p.word_id = w.id AND p.user_id = :uid AND p.skill = 'translate'
+        LEFT JOIN progress pa ON pa.word_id = w.id AND pa.user_id = :uid AND pa.skill = 'aorist'
+        LEFT JOIN progress pc ON pc.word_id = w.id AND pc.user_id = :uid AND pc.skill = 'aorist_conj'
         GROUP BY g.id ORDER BY g.position, g.id
         """,
-        (user["id"],),
+        {"uid": user["id"]},
     ).fetchall()
     return [dict(r) for r in rows]
 
@@ -193,6 +202,7 @@ class WordIn(BaseModel):
     greek: str = Field(min_length=1, max_length=200)
     russian: str = Field(min_length=1, max_length=300)
     note: str = Field(default="", max_length=500)
+    aorist: str = Field(default="", max_length=200)
 
 
 class BulkIn(BaseModel):
@@ -209,11 +219,11 @@ def _check_group(db, group_id: int) -> None:
 def list_words(user=Depends(current_user), db=Depends(get_db)):
     rows = db.execute(
         """
-        SELECT w.id, w.group_id, w.greek, w.russian, w.note,
+        SELECT w.id, w.group_id, w.greek, w.russian, w.note, w.aorist,
                COALESCE(p.learned, 0) AS learned, COALESCE(p.box, 0) AS box,
                COALESCE(p.correct, 0) AS correct, COALESCE(p.wrong, 0) AS wrong
         FROM words w
-        LEFT JOIN progress p ON p.word_id = w.id AND p.user_id = ?
+        LEFT JOIN progress p ON p.word_id = w.id AND p.user_id = ? AND p.skill = 'translate'
         ORDER BY w.id
         """,
         (user["id"],),
@@ -225,8 +235,8 @@ def list_words(user=Depends(current_user), db=Depends(get_db)):
 def create_word(body: WordIn, user=Depends(current_user), db=Depends(get_db)):
     _check_group(db, body.group_id)
     wid = db.execute(
-        "INSERT INTO words (group_id, greek, russian, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (body.group_id, body.greek.strip(), body.russian.strip(), body.note.strip(), user["id"], int(time.time())),
+        "INSERT INTO words (group_id, greek, russian, note, aorist, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (body.group_id, body.greek.strip(), body.russian.strip(), body.note.strip(), body.aorist.strip(), user["id"], int(time.time())),
     ).lastrowid
     return {"id": wid}
 
@@ -235,8 +245,8 @@ def create_word(body: WordIn, user=Depends(current_user), db=Depends(get_db)):
 def update_word(word_id: int, body: WordIn, user=Depends(current_user), db=Depends(get_db)):
     _check_group(db, body.group_id)
     cur = db.execute(
-        "UPDATE words SET group_id = ?, greek = ?, russian = ?, note = ? WHERE id = ?",
-        (body.group_id, body.greek.strip(), body.russian.strip(), body.note.strip(), word_id),
+        "UPDATE words SET group_id = ?, greek = ?, russian = ?, note = ?, aorist = ? WHERE id = ?",
+        (body.group_id, body.greek.strip(), body.russian.strip(), body.note.strip(), body.aorist.strip(), word_id),
     )
     if cur.rowcount == 0:
         raise HTTPException(404, "Слово не найдено")
@@ -277,8 +287,8 @@ def bulk_words(body: BulkIn, user=Depends(current_user), db=Depends(get_db)):
             continue
         existing.add(greek.lower())
         db.execute(
-            "INSERT INTO words (group_id, greek, russian, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (body.group_id, greek, russian, note, user["id"], now),
+            "INSERT INTO words (group_id, greek, russian, note, aorist, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (body.group_id, greek, russian, note, aorist_from_note(note), user["id"], now),
         )
         added += 1
     return {"added": added, "skipped": skipped, "bad": bad[:20]}
@@ -286,11 +296,13 @@ def bulk_words(body: BulkIn, user=Depends(current_user), db=Depends(get_db)):
 
 class LearnedIn(BaseModel):
     learned: bool
+    skill: Skill = "translate"
 
 
-def _upsert_progress(db, user_id: int, word_id: int) -> None:
+def _upsert_progress(db, user_id: int, word_id: int, skill: str) -> None:
     db.execute(
-        "INSERT OR IGNORE INTO progress (user_id, word_id) VALUES (?, ?)", (user_id, word_id)
+        "INSERT OR IGNORE INTO progress (user_id, word_id, skill) VALUES (?, ?, ?)",
+        (user_id, word_id, skill),
     )
 
 
@@ -298,10 +310,10 @@ def _upsert_progress(db, user_id: int, word_id: int) -> None:
 def set_learned(word_id: int, body: LearnedIn, user=Depends(current_user), db=Depends(get_db)):
     if not db.execute("SELECT 1 FROM words WHERE id = ?", (word_id,)).fetchone():
         raise HTTPException(404, "Слово не найдено")
-    _upsert_progress(db, user["id"], word_id)
+    _upsert_progress(db, user["id"], word_id, body.skill)
     db.execute(
-        "UPDATE progress SET learned = ?, learned_at = ? WHERE user_id = ? AND word_id = ?",
-        (int(body.learned), int(time.time()) if body.learned else None, user["id"], word_id),
+        "UPDATE progress SET learned = ?, learned_at = ? WHERE user_id = ? AND word_id = ? AND skill = ?",
+        (int(body.learned), int(time.time()) if body.learned else None, user["id"], word_id, body.skill),
     )
     return {"ok": True}
 
@@ -321,6 +333,7 @@ def study(
     groups: str,
     mode: Literal["unlearned", "learned", "all"] = "unlearned",
     limit: int = 20,
+    skill: Skill = "translate",
     user=Depends(current_user),
     db=Depends(get_db),
 ):
@@ -334,6 +347,8 @@ def study(
         "learned": "p.learned = 1",
         "all": "1 = 1",
     }[mode]
+    if skill in VERB_SKILLS:
+        where += " AND w.aorist != ''"
     # Due repeats first, then never-seen words, then the rest by how soon they are due.
     order = (
         "CASE WHEN p.word_id IS NOT NULL AND p.due_at <= :now THEN 0 "
@@ -343,14 +358,14 @@ def study(
     )
     placeholders = ",".join(f":g{i}" for i in range(len(ids)))
     params = {f"g{i}": gid for i, gid in enumerate(ids)}
-    params.update(uid=user["id"], now=now, limit=limit)
+    params.update(uid=user["id"], now=now, limit=limit, skill=skill)
     rows = db.execute(
         f"""
-        SELECT w.id, w.greek, w.russian, w.note, g.name AS group_name,
+        SELECT w.id, w.greek, w.russian, w.note, w.aorist, g.name AS group_name,
                COALESCE(p.learned, 0) AS learned, COALESCE(p.box, 0) AS box
         FROM words w
         JOIN groups g ON g.id = w.group_id
-        LEFT JOIN progress p ON p.word_id = w.id AND p.user_id = :uid
+        LEFT JOIN progress p ON p.word_id = w.id AND p.user_id = :uid AND p.skill = :skill
         WHERE w.group_id IN ({placeholders}) AND {where}
         ORDER BY {order}
         LIMIT :limit
@@ -358,6 +373,10 @@ def study(
         params,
     ).fetchall()
     cards = [dict(r) for r in rows]
+    if skill in VERB_SKILLS:
+        for c in cards:
+            c["forms"] = conjugate(c["aorist"], c["greek"])
+            c["hint"] = hint(c["aorist"], c["greek"])
     random.shuffle(cards)
     return cards
 
@@ -365,7 +384,8 @@ def study(
 class ReviewIn(BaseModel):
     word_id: int
     correct: bool
-    direction: Literal["gr-ru", "ru-gr"]
+    # For the verb skills the direction is the skill itself: present form shown, past form asked.
+    direction: Literal["gr-ru", "ru-gr", "aorist", "aorist_conj"]
 
 
 @app.post("/api/review")
@@ -373,17 +393,19 @@ def review(body: ReviewIn, user=Depends(current_user), db=Depends(get_db)):
     if not db.execute("SELECT 1 FROM words WHERE id = ?", (body.word_id,)).fetchone():
         raise HTTPException(404, "Слово не найдено")
     now = int(time.time())
-    _upsert_progress(db, user["id"], body.word_id)
+    skill = body.direction if body.direction in VERB_SKILLS else "translate"
+    _upsert_progress(db, user["id"], body.word_id, skill)
     box = db.execute(
-        "SELECT box FROM progress WHERE user_id = ? AND word_id = ?", (user["id"], body.word_id)
+        "SELECT box FROM progress WHERE user_id = ? AND word_id = ? AND skill = ?",
+        (user["id"], body.word_id, skill),
     ).fetchone()[0]
     box = min(box + 1, len(BOX_INTERVAL_DAYS) - 1) if body.correct else 0
     due = now + BOX_INTERVAL_DAYS[box] * 86400
     db.execute(
         f"""UPDATE progress SET box = ?, due_at = ?, last_seen = ?,
             {'correct = correct + 1' if body.correct else 'wrong = wrong + 1'}
-            WHERE user_id = ? AND word_id = ?""",
-        (box, due, now, user["id"], body.word_id),
+            WHERE user_id = ? AND word_id = ? AND skill = ?""",
+        (box, due, now, user["id"], body.word_id, skill),
     )
     db.execute(
         "INSERT INTO reviews (user_id, word_id, ts, correct, direction) VALUES (?, ?, ?, ?, ?)",
@@ -399,6 +421,7 @@ def review(body: ReviewIn, user=Depends(current_user), db=Depends(get_db)):
 def stats(days: int = 30, user=Depends(current_user), db=Depends(get_db)):
     days = max(7, min(days, 365))
     total = db.execute("SELECT COUNT(*) FROM words").fetchone()[0]
+    verbs = db.execute("SELECT COUNT(*) FROM words WHERE aorist != ''").fetchone()[0]
     groups = db.execute(
         "SELECT g.id, g.name, COUNT(w.id) AS total FROM groups g "
         "LEFT JOIN words w ON w.group_id = g.id GROUP BY g.id ORDER BY g.position, g.id"
@@ -413,17 +436,29 @@ def stats(days: int = 30, user=Depends(current_user), db=Depends(get_db)):
             int,
             db.execute(
                 "SELECT w.group_id, COUNT(*) FROM progress p JOIN words w ON w.id = p.word_id "
-                "WHERE p.user_id = ? AND p.learned = 1 GROUP BY w.group_id",
+                "WHERE p.user_id = ? AND p.skill = 'translate' AND p.learned = 1 GROUP BY w.group_id",
                 (uid,),
             ).fetchall(),
         )
         learned_days = defaultdict(int)
         for (ts,) in db.execute(
-            "SELECT learned_at FROM progress WHERE user_id = ? AND learned = 1 AND learned_at IS NOT NULL",
+            "SELECT learned_at FROM progress WHERE user_id = ? AND skill = 'translate' AND learned = 1 "
+            "AND learned_at IS NOT NULL",
             (uid,),
         ):
             learned_days[local_day(ts)] += 1
-        seen = db.execute("SELECT COUNT(*) FROM progress WHERE user_id = ?", (uid,)).fetchone()[0]
+        seen = db.execute(
+            "SELECT COUNT(*) FROM progress WHERE user_id = ? AND skill = 'translate'", (uid,)
+        ).fetchone()[0]
+        verbs_learned = defaultdict(
+            int,
+            db.execute(
+                "SELECT p.skill, COUNT(*) FROM progress p JOIN words w ON w.id = p.word_id "
+                "WHERE p.user_id = ? AND p.skill != 'translate' AND p.learned = 1 AND w.aorist != '' "
+                "GROUP BY p.skill",
+                (uid,),
+            ).fetchall(),
+        )
 
         per_day = defaultdict(lambda: [0, 0])  # day -> [answers, correct]
         all_correct = all_answers = 0
@@ -446,6 +481,8 @@ def stats(days: int = 30, user=Depends(current_user), db=Depends(get_db)):
                 "username": u["username"],
                 "learned": sum(learned_by_group.values()),
                 "seen": seen,
+                "aorist_learned": verbs_learned["aorist"],
+                "conj_learned": verbs_learned["aorist_conj"],
                 "answers": all_answers,
                 "accuracy": round(100 * all_correct / all_answers) if all_answers else None,
                 "streak": streak,
@@ -465,4 +502,4 @@ def stats(days: int = 30, user=Depends(current_user), db=Depends(get_db)):
                 ],
             }
         )
-    return {"total": total, "me": user["id"], "users": result}
+    return {"total": total, "verbs": verbs, "me": user["id"], "users": result}
